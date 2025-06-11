@@ -1,0 +1,9 @@
+inference
+streamlit
+numpy
+cv2
+supervision
+streamlit-drawable-canvas
+Pillow
+matplotlib
+
