@@ -8,17 +8,17 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from streamlit_drawable_canvas import st_canvas
 
-# Roboflow API Key
+
 os.environ["ROBOFLOW_API_KEY"] = "rC3zob8rOUpOtd3W3bxY"
 
-# Load model once
+
 @st.cache_resource
 def load_model():
     return get_model(model_id="mouse-optic-nerve-uktj7/6", api_key=os.environ["ROBOFLOW_API_KEY"])
 
 model = load_model()
 
-# Step controller
+
 if "app_step" not in st.session_state:
     st.session_state.app_step = "upload"
 if "yellow_mask" not in st.session_state:
@@ -40,7 +40,7 @@ if st.session_state.app_step == "upload":
     uploaded_file = st.file_uploader("Upload an optic nerve image", type=["png", "jpg", "jpeg"])
     
     if uploaded_file is not None:
-        # Convert file to image
+        
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         st.image(image, caption="Original Image", channels="BGR")
@@ -209,7 +209,7 @@ if st.session_state.app_step == "analyze":
         st.write(f"🔸 Bottom path points: {len(bottom_path)}")
 
         # === START: Midpoint Intersection Analysis ===
-        # Convert yellow_mask to binary if not already
+        
         _, binary_mask = cv2.threshold(yellow_mask, 127, 255, cv2.THRESH_BINARY)
 
         # Find contours again (for intersection analysis)
@@ -308,16 +308,16 @@ if st.session_state.app_step == "analyze":
         # Show visualization
         st.image(visualization, caption="Midpoint Intersection Analysis", use_column_width=True)
 
-        # Additional confirmation checkmark below midpoint creation
+        
         st.success("✅ Midpoint creation done.")
 
-        # Store values needed for next step in session state
+ 
         st.session_state.yellow_mask_processed = yellow_mask
         st.session_state.top_x_values = top_x_values
         st.session_state.bottom_x_values = bottom_x_values
         st.session_state.midpoints = midpoints
 
-    # Move the Next button outside the Run Contour Analysis button logic
+
     if st.button("➡️ Next: See Diameter Visualization and Graph"):
         st.session_state.app_step = "diameter"
         st.experimental_rerun()
