@@ -122,7 +122,7 @@ if st.session_state.app_step == "select" and st.session_state.yellow_mask is not
         point_display_radius=8,
         key="canvas_chiasm"
     )
-
+    #MAY CHANGE this later
     point_radius = 8  # must match point_display_radius in st_canvas
 
     if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) >= 2:
@@ -680,16 +680,19 @@ if st.session_state.app_step == "diameter":
     st.pyplot(fig1)
 
     # Plot diameter vs x position in Streamlit
+    radius = 30
     fig2, ax2 = plt.subplots(figsize=(10, 6))
     if diameters_top:
-        positions_top = [i * 30 for i in range(len(diameters_top))]
+        positions_top = [i * radius for i in range(len(diameters_top))]
         d_values_top = [d for x, d in diameters_top]
         ax2.plot(positions_top, d_values_top, 'go-', label='Top Nerve')
 
     if diameters_bottom:
-        positions_bottom = [i * 30 for i in range(len(diameters_bottom))]
+        positions_bottom = [i * radius for i in range(len(diameters_bottom))]
         d_values_bottom = [d for x, d in diameters_bottom]
         ax2.plot(positions_bottom, d_values_bottom, 'ro-', label='Bottom Nerve')
+
+        # ...existing code...
 
     ax2.set_xlabel('Position along Nerve (multiples of 30 px)')
     ax2.set_ylabel('Diameter (px)')
@@ -697,3 +700,40 @@ if st.session_state.app_step == "diameter":
     ax2.legend()
     ax2.grid(True)
     st.pyplot(fig2)
+
+    # --- CSV Download Option ---
+
+    import pandas as pd
+    from io import StringIO
+
+    # Prepare data for CSV
+    csv_data = []
+    if diameters_top:
+        for i, (x, d) in enumerate(diameters_top):
+            csv_data.append({
+                "Type": "Top",
+                "Index": i,
+                "X": x,
+                "Position_along_nerve": i * radius,
+                "Diameter": d
+            })
+    if diameters_bottom:
+        for i, (x, d) in enumerate(diameters_bottom):
+            csv_data.append({
+                "Type": "Bottom",
+                "Index": i,
+                "X": x,
+                "Position_along_nerve": i * radius,
+                "Diameter": d
+            })
+
+    if csv_data:
+        df = pd.DataFrame(csv_data)
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        st.download_button(
+            label="⬇️ Download Diameter Data as CSV",
+            data=csv_buffer.getvalue(),
+            file_name="nerve_diameters.csv",
+            mime="text/csv"
+        )
