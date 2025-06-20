@@ -210,33 +210,50 @@ if st.session_state.app_step == "analyze":
 
         # === START: Midpoint Intersection Analysis ===
         
+        # Load the refined mask (replace this with your actual refined mask)
+        # refined_mask = cv2.imread('path_to_refined_mask', cv2.IMREAD_GRAYSCALE)
+
+        # Binarize the mask to ensure it's clean
         _, binary_mask = cv2.threshold(yellow_mask, 127, 255, cv2.THRESH_BINARY)
 
-        # Find contours again (for intersection analysis)
-        contours_all, _ = cv2.findContours(binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # Find contours (for the outline and internal contours)
+        contours, _ = cv2.findContours(binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        # Prepare visualization image (color)
+        # Create a color version of the mask for visualization
         visualization = cv2.cvtColor(yellow_mask, cv2.COLOR_GRAY2BGR)
+
+        # Variables to keep track of x-coordinate and intersection counts
+        x_start = leftmost_x
+        x_end = rightmost_x  # Replace with the actual value of the rightmost x-coordinate
+
+        # Store counts of intersections for each vertical line
+        intersection_counts = []
+        midpoints = []  # List to store midpoints of intersections
 
         # Use x-values from top_path and bottom_path for vertical line checks
         top_x_values = [pt[0] for pt in top_path]
         bottom_x_values = [pt[0] for pt in bottom_path]
-        red_lines = top_x_values + bottom_x_values
 
-        midpoints = []
+        red_lines = top_x_values[1:] + bottom_x_values
 
+        # Iterate over x-coordinates
         for x in red_lines:
+
             intersections = []
-            for contour in contours_all:
+            for contour in contours:
+                # Check where the vertical line intersects the contour
                 for i in range(len(contour) - 1):
                     pt1, pt2 = contour[i][0], contour[i + 1][0]
-                    if pt1[0] <= x <= pt2[0] or pt2[0] <= x <= pt1[0]:
+                    if pt1[0] <= x <= pt2[0] or pt2[0] <= x <= pt1[0]:  # Check if x lies between contour points
                         intersections.append((pt1[1], pt2[1]))
 
-            # Sort intersections by y values
+
+            # Only process if there are intersections
             if intersections:
+                # Sort intersections by y-values for consistency
                 intersections = sorted(intersections, key=lambda t: min(t[0], t[1]))
 
+                # Group intersections within a threshold of ±3
                 groups = []
                 current_group = [intersections[0]]
 
@@ -244,66 +261,108 @@ if st.session_state.app_step == "analyze":
                     y1, y2 = intersections[i]
                     last_y1, last_y2 = current_group[-1]
 
+                    # If the y-values are within ±3, group them together
                     if abs(y1 - last_y1) <= 3 or abs(y2 - last_y2) <= 3:
                         current_group.append((y1, y2))
                     else:
                         groups.append(current_group)
                         current_group = [(y1, y2)]
+
+                # Append the last group
                 groups.append(current_group)
 
+
+
+                # If there are at least 4 groups, find the midpoint between the 2nd and 3rd groups
                 if len(groups) >= 4:
                     group_2 = groups[1]
                     group_3 = groups[2]
 
+                    # Take the average of the y-values for the 2nd group
                     y2_avg = np.mean([y for y, _ in group_2])
+                    # Take the average of the y-values for the 3rd group
                     y3_avg = np.mean([y for y, _ in group_3])
 
+                    # Compute the midpoint
                     midpoint_y = int((y2_avg + y3_avg) / 2)
-                    midpoints.append((x, midpoint_y))
+                    midpoints.append((x, midpoint_y))  # Store the midpoint (x, midpoint_y)
 
-                    cv2.circle(visualization, (x, midpoint_y), 5, (0, 0, 255), -1)
-
+                    # Draw the midpoint as a red point on the visualization
+                    cv2.circle(visualization, (x, midpoint_y), 5, (0, 0, 255), -1)  # Red point
                 elif len(groups) == 3:
+                    # If there are exactly 3 groups, use the middle y-value
                     middle_group = groups[1]
                     middle_group_avg_y = np.mean([y for y, _ in middle_group])
 
+                    # Add the middle y-value as the midpoint
                     midpoints.append((x, int(middle_group_avg_y)))
 
-                    cv2.circle(visualization, (x, int(middle_group_avg_y)), 5, (0, 0, 255), -1)
-
+                    # Draw the midpoint as a red point on the visualization
+                    cv2.circle(visualization, (x, int(middle_group_avg_y)), 5, (0, 0, 255), -1)  # Red point
                 else:
-                    last_midpoint_y = midpoints[-1][1] if midpoints else 0
+                    # If less than 4 groups, calculate an additional midpoint
+                    if midpoints:
+                        # Use the last valid midpoint
+                        last_midpoint_y = midpoints[-1][1]
+                    else:
+                        last_midpoint_y = 0  # Fallback in case there's no valid midpoint yet
 
+                    # Use the first group intersection's y-value (average of y-values of the first group)
                     first_group = groups[0]
                     first_group_avg_y = np.mean([y for y, _ in first_group])
 
+                    # Use the last group intersection's y-value (average of y-values of the last group)
                     last_group = groups[-1]
                     last_group_avg_y = np.mean([y for y, _ in last_group])
 
-                    average_y = int((last_midpoint_y + first_group_avg_y + last_group_avg_y) / 3)
+                    # Smarter fallback: avoid weird high midpoints if groups collapse
 
+                    # If there is more than one group and first/last are very far apart → trust average
+                    if len(groups) > 1 and abs(first_group_avg_y - last_group_avg_y) > 10:
+                        average_y = int((last_midpoint_y + first_group_avg_y + last_group_avg_y) / 3)
+                    else:
+                        # Groups too close → likely noise, just repeat last good midpoint
+                        average_y = last_midpoint_y
+
+                    # Add this new midpoint
                     midpoints.append((x, average_y))
 
-                    cv2.circle(visualization, (x, average_y), 5, (0, 0, 255), -1)
+                    # Draw the midpoint as a red point on the visualization
+                    cv2.circle(visualization, (x, average_y), 5, (0, 0, 255), -1)  # Red point
 
-            color = (255, 0, 0) if not intersections else (0, 255, 0)
+
+            # Draw the vertical line on visualization for debugging
+            color = (255, 0, 0) if not intersections else (0, 255, 0)  # Blue for no intersections, green for any intersections
             cv2.line(visualization, (x, 0), (x, yellow_mask.shape[0]), color, 1)
 
+            # Print the x-coordinate of the vertical line if it intersects with the contour
+            if intersections:
+                print(f"Vertical line at x={x} has intersections.")
 
-        # Draw lines connecting midpoints
+            # Display the x-coordinate on the image near the vertical line with smaller text
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(visualization, str(x), (x + 5, yellow_mask.shape[0] - 10), font, 0.2, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Debugging: print midpoints list to check
+
+
+        # After gathering midpoints, draw lines between consecutive midpoints to create a continuous line
         if len(midpoints) > 1:
             for i in range(1, len(midpoints)):
                 pt1 = midpoints[i - 1]
                 pt2 = midpoints[i]
-                cv2.line(visualization, (pt1[0], pt1[1]), (pt2[0], pt2[1]), (0, 255, 255), 2)
+                cv2.line(visualization, (pt1[0], pt1[1]), (pt2[0], pt2[1]), (0, 255, 255), 2)  # Yellow line
 
-        # Extend horizontal lines at ends
+        # Extend horizontal lines at the leftmost and rightmost points
         if midpoints:
+            # Leftmost point
             leftmost_x_point, leftmost_y = midpoints[-1]
-            cv2.line(visualization, (leftmost_x_point, leftmost_y), (0, leftmost_y), (255, 255, 0), 2)
+            cv2.line(visualization, (leftmost_x_point, leftmost_y), (0, leftmost_y), (255, 255, 0), 2)  # Left horizontal line
 
+            # Rightmost point
             rightmost_x_point, rightmost_y = midpoints[0]
-            cv2.line(visualization, (rightmost_x_point, rightmost_y), (rightmost_x_point + 500, rightmost_y), (255, 255, 0), 2)
+
+            cv2.line(visualization, (rightmost_x_point, rightmost_y), (rightmost_x_point + 500, rightmost_y), (255, 255, 0), 2)  # Right horizontal line
 
         # Show visualization
         st.image(visualization, caption="Midpoint Intersection Analysis", use_column_width=True)
@@ -321,7 +380,6 @@ if st.session_state.app_step == "analyze":
     if st.button("➡️ Next: See Diameter Visualization and Graph"):
         st.session_state.app_step = "diameter"
         st.experimental_rerun()
-
 # --- STEP 4: DIAMETER MEASUREMENT ---
 
 if st.session_state.app_step == "diameter":
@@ -346,131 +404,287 @@ if st.session_state.app_step == "diameter":
     height, width = yellow_mask.shape
     np.random.seed(42)
 
-    top_points = []
-    bottom_points = []
+    # Storage for top and bottom points with section index
+    top_points = []  # Will store (x, y, section_index)
+    bottom_points = []  # Will store (x, y, section_index)
+
+    # Track if any intersections are found
     found_intersections = False
 
-    # --- Find top points ---
-    for i, x in enumerate(top_x_values):
-        column = yellow_mask[:, x]
-        nonzero_y = np.where(column > 0)[0]
+    color = (0, 255, 255)  # yellow for points
+
+    # --- Top points ---
+    for i, x in enumerate(top_x_values):  # Use enumerate to get index `i`
+        column = yellow_mask[:, x]  # Get the column at x-position
+        nonzero_y = np.where(column > 0)[0]  # Find y-coordinates where mask is present
+
         if len(nonzero_y) < 2:
-            continue
-        top_intersection = nonzero_y[0]
+            continue  # Skip if not enough mask pixels
+
+        top_intersection = nonzero_y[0]  # Topmost y
+
         found_intersections = True
+
         midpoint_y = midpoints[i][1] if i < len(midpoints) else height // 2
+
         if top_intersection < midpoint_y:
             top_points.append((x, top_intersection, i))
-            cv2.circle(color_mask, (x, top_intersection), 6, (0, 255, 255), -1)  # yellow circle
+            cv2.circle(color_mask, (x, top_intersection), 6, color, -1)
 
-    # --- Find bottom points ---
-    for i, x in enumerate(bottom_x_values):
+    # --- Bottom points ---
+    for i, x in enumerate(bottom_x_values):  # Again, use enumerate for index
         column = yellow_mask[:, x]
         nonzero_y = np.where(column > 0)[0]
+
         if len(nonzero_y) < 2:
             continue
-        bottom_intersection = nonzero_y[-1]
+
+        bottom_intersection = nonzero_y[-1]  # Bottommost y
+
         found_intersections = True
+
         midpoint_y = midpoints[i][1] if i < len(midpoints) else height // 2
+
         if bottom_intersection > midpoint_y:
             bottom_points.append((x, bottom_intersection, i))
-            cv2.circle(color_mask, (x, bottom_intersection), 6, (0, 255, 255), -1)  # yellow circle
+            cv2.circle(color_mask, (x, bottom_intersection), 6, color, -1)
 
+    # Function to estimate tangent slope using nearby points
     def estimate_tangent_slope(points, index, search_range=3):
+        """Estimate the tangent slope at a given index using nearby points."""
         if len(points) < 2:
-            return None
+            return None  # Not enough points to estimate slope
+
         x, y, _ = points[index]
+
+        # Find two nearby points for slope estimation
         left_idx = max(0, index - search_range)
         right_idx = min(len(points) - 1, index + search_range)
+
         x1, y1, _ = points[left_idx]
         x2, y2, _ = points[right_idx]
-        if x2 - x1 == 0:
-            return None
-        return (y2 - y1) / (x2 - x1)
 
+        if x2 - x1 == 0:
+            return None  # Avoid division by zero
+
+        return (y2 - y1) / (x2 - x1)  # Slope = rise / run
+
+    # Function to find intersection with mask boundary along a line with midpoint constraint
     def find_mask_intersection(mask, start_x, start_y, angle, midpoint_y, is_top, max_length=300):
+        """Find the intersection point with mask boundary starting from (start_x, start_y)
+        and moving in the direction given by angle (in radians).
+
+        Parameters:
+        - mask: The binary mask image
+        - start_x, start_y: Starting point coordinates
+        - angle: Direction angle in radians
+        - midpoint_y: Y-coordinate of midpoint line (for stopping condition)
+        - is_top: Whether this is for the top nerve (True) or bottom nerve (False)
+        - max_length: Maximum ray length to check
+        """
         dx = np.cos(angle)
         dy = np.sin(angle)
+
+        # Check points along the ray
         for length in range(1, max_length):
             x = int(start_x + length * dx)
             y = int(start_y + length * dy)
+
+            # Check if out of bounds
             if x < 0 or x >= mask.shape[1] or y < 0 or y >= mask.shape[0]:
                 return None
+
+            # Check if we've reached the midpoint boundary
+            # For top nerve, stop if we go below midpoint (when going down)
             if is_top and dy > 0 and y >= midpoint_y:
                 return (x, y)
+
+            # For bottom nerve, stop if we go above midpoint (when going up)
             if not is_top and dy < 0 and y <= midpoint_y:
                 return (x, y)
+
+            # Check if we've hit the boundary (pixel value changes from >0 to 0)
             if mask[y, x] == 0:
                 return (x, y)
+
+        return None  # No intersection found within max_length
+
+    def vertical_diameter_top_leg(mask, start_x, start_y, midpoint_y, go_down=True, max_length=300):
+        """
+        For index == 1: Draw a vertical line up or down from (start_x, start_y),
+        stopping when reaching midpoint_y or exiting mask.
+        """
+        direction = 1 if go_down else -1
+
+        for length in range(1, max_length):
+            x = start_x
+            y = start_y + length * direction  # Move vertically
+
+            # Out of bounds
+            if x < 0 or x >= mask.shape[1] or y < 0 or y >= mask.shape[0]:
+                return None
+
+            # If reached midpoint_y, stop
+            if go_down and y >= midpoint_y:
+                return (x, y)
+            if not go_down and y <= midpoint_y:
+                return (x, y)
+
+            # If pixel is outside mask, stop
+            if mask[y, x] == 0:
+                return (x, y)
+
         return None
 
+    def vertical_diameter_bottom_leg(mask, start_x, start_y, midpoint_y, go_up=True, max_length=300):
+        """
+        For bottom leg: Draw a vertical line up or down from (start_x, start_y),
+        stopping when reaching midpoint_y or exiting mask.
+        """
+        direction = -1 if go_up else 1
+
+        for length in range(1, max_length):
+            x = start_x
+            y = start_y + length * direction  # Move vertically
+
+            # Out of bounds
+            if x < 0 or x >= mask.shape[1] or y < 0 or y >= mask.shape[0]:
+                return None
+
+            # If reached midpoint_y, stop
+            if go_up and y <= midpoint_y:
+                return (x, y)
+            if not go_up and y >= midpoint_y:
+                return (x, y)
+
+            # If pixel is outside mask, stop
+            if mask[y, x] == 0:
+                return (x, y)
+
+        return None
+
+    # Lists to store diameter measurements
     diameters_top = []
     diameters_bottom = []
 
     # Process top points
     for i, (x, y, section_idx) in enumerate(top_points):
+
         slope = estimate_tangent_slope(top_points, i)
         if slope is None:
             continue
+
+        # Get the midpoint y for this section
         midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
+
+        # Calculate perpendicular angle (in radians)
         perp_angle = np.arctan(-1/slope) if slope != 0 else np.pi/2
+
+        # Find the intersection with the upper boundary (going up)
         intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi,
                                               midpoint_y, True)
+
+        # Find the intersection with the lower boundary (going down)
         intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle,
                                               midpoint_y, True)
+
+        if (i == 0):
+            intersection1 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=False)
+            intersection2 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=True)
+
+        # Draw the full diameter line if both intersections found
         if intersection1 and intersection2:
             x1, y1 = intersection1
             x2, y2 = intersection2
+
             diameter = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+
+            if diameter < 5:
+                # fallback to vertical:
+                intersection1 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=False)
+                intersection2 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=True)
+                
+                if intersection1 and intersection2:
+                    x1, y1 = intersection1
+                    x2, y2 = intersection2
+                    diameter = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+
             diameters_top.append((x, diameter))
             cv2.line(color_mask, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
     # Process bottom points
     for i, (x, y, section_idx) in enumerate(bottom_points):
+        
         slope = estimate_tangent_slope(bottom_points, i)
         if slope is None:
             continue
+
+        # Get the midpoint y for this section
         midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
+
+        # Calculate perpendicular angle (in radians)
         perp_angle = np.arctan(-1/slope) if slope != 0 else np.pi/2
+
+        # Find the intersection with the lower boundary (going down)
         intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle,
                                               midpoint_y, False)
+
+        # Find the intersection with the upper boundary (going up)
         intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi,
                                               midpoint_y, False)
+
+        if (i == 0):
+            intersection1 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=False)
+            intersection2 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=True)
+
         if intersection1 and intersection2:
             x1, y1 = intersection1
             x2, y2 = intersection2
-            diameter = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+
+            diameter = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+            if diameter < 5:
+                # fallback to vertical:
+                intersection1 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=False)
+                intersection2 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=True)
+                
+                if intersection1 and intersection2:
+                    x1, y1 = intersection1
+                    x2, y2 = intersection2
+                    diameter = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
             diameters_bottom.append((x, diameter))
             cv2.line(color_mask, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-    # Draw midpoints
-    for midpoint in midpoints:
+    # Draw the midpoint dots to visualize the midpoints
+    for i, midpoint in enumerate(midpoints):
         cv2.circle(color_mask, (int(midpoint[0]), int(midpoint[1])), 4, (255, 255, 0), -1)
 
-    # Show the mask with diameter lines and midpoints in Streamlit
+    # Display the result with measurements in Streamlit
     fig1, ax1 = plt.subplots(figsize=(12, 8))
     ax1.imshow(cv2.cvtColor(color_mask, cv2.COLOR_BGR2RGB))
     ax1.set_xlim(0, width)
     ax1.set_ylim(height, 0)
-    ax1.set_xlabel('X-axis')
+    ax1.set_xlabel('Position Value (How Far Along the Nerve)')
     ax1.set_ylabel('Y-axis')
-    ax1.set_title('Nerve Diameter Measurements with Midpoint Constraint')
+    ax1.set_title('Nerve Diameter Measurements Graph')
     st.pyplot(fig1)
 
-    # Plot diameter vs x position
+    # Plot diameter vs x position in Streamlit
     fig2, ax2 = plt.subplots(figsize=(10, 6))
     if diameters_top:
-        x_vals_top = [x for x, d in diameters_top]
-        d_vals_top = [d for x, d in diameters_top]
-        ax2.plot(x_vals_top, d_vals_top, 'go-', label='Top Nerve')
+        positions_top = [i * 30 for i in range(len(diameters_top))]
+        d_values_top = [d for x, d in diameters_top]
+        ax2.plot(positions_top, d_values_top, 'go-', label='Top Nerve')
+
     if diameters_bottom:
-        x_vals_bottom = [x for x, d in diameters_bottom]
-        d_vals_bottom = [d for x, d in diameters_bottom]
-        ax2.plot(x_vals_bottom, d_vals_bottom, 'ro-', label='Bottom Nerve')
-    ax2.set_xlabel('Relative X Position on Nerve')
-    ax2.set_ylabel('Diameter')
-    ax2.set_title('Nerve Diameter vs X Position')
-    ax2.invert_xaxis()
+        positions_bottom = [i * 30 for i in range(len(diameters_bottom))]
+        d_values_bottom = [d for x, d in diameters_bottom]
+        ax2.plot(positions_bottom, d_values_bottom, 'ro-', label='Bottom Nerve')
+
+    ax2.set_xlabel('Position along Nerve (multiples of 30 px)')
+    ax2.set_ylabel('Diameter (px)')
+    ax2.set_title('Nerve Diameter vs Position')
     ax2.legend()
     ax2.grid(True)
     st.pyplot(fig2)
