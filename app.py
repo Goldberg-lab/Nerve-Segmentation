@@ -123,15 +123,24 @@ if st.session_state.app_step == "select" and st.session_state.yellow_mask is not
         key="canvas_chiasm"
     )
 
+    point_radius = 8  # must match point_display_radius in st_canvas
+
     if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) >= 2:
         coords = canvas_result.json_data["objects"]
-        point1 = int(coords[0]["left"] / scale_factor), int(coords[0]["top"] / scale_factor)
-        point2 = int(coords[1]["left"] / scale_factor), int(coords[1]["top"] / scale_factor)
+        point1 = (
+            round((coords[0]["left"] + point_radius) / scale_factor),
+            round((coords[0]["top"] + point_radius) / scale_factor)
+        )
+        point2 = (
+            round((coords[1]["left"] + point_radius) / scale_factor),
+            round((coords[1]["top"] + point_radius) / scale_factor)
+        )
 
         st.session_state.rightmost_point = point1
         st.session_state.leftmost_point = point2
 
         st.success(f"✅ Rightmost X: {point1[0]}, Leftmost X: {point2[0]}")
+    # ...rest of your code...
 
         if st.button("➡️ Next: Run Contour Analysis"):
             st.session_state.app_step = "analyze"
