@@ -7,6 +7,9 @@ import os
 from PIL import Image
 import matplotlib.pyplot as plt
 from streamlit_drawable_canvas import st_canvas
+from pathlib import Path
+import zipfile
+import shutil
 
 
 os.environ["ROBOFLOW_API_KEY"] = "rC3zob8rOUpOtd3W3bxY"
@@ -29,75 +32,108 @@ if "rightmost_point" not in st.session_state:
     st.session_state.rightmost_point = None
 if "leftmost_point" not in st.session_state:
     st.session_state.leftmost_point = None
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
+if "current_img_idx" not in st.session_state:
+    st.session_state.current_img_idx = 0
+if "csv_buffers" not in st.session_state:
+    st.session_state.csv_buffers = {}
 
 st.title("🧠 Optic Nerve Mask Segmentation")
 
 
-# --- STEP 1: UPLOAD + INFERENCE ---
 if st.session_state.app_step == "upload":
+    st.write("Welcome to the Optic Nerve Mask Segmentation App! This app allows you to upload a folder of optic nerve images, run inference to segment each nerve, and then select chiasm points for further analysis.")
 
-    st.write("Welcome to the Optic Nerve Mask Segmentation App! This app allows you to upload an optic nerve image, run inference to segment the nerve, and then select chiasm points for further analysis.")
-    uploaded_file = st.file_uploader("Upload an optic nerve image", type=["png", "jpg", "jpeg"])
-    
-    if uploaded_file is not None:
-        st.session_state.uploaded_filename = os.path.splitext(uploaded_file.name)[0]
-        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        st.image(image, caption="Original Image", channels="BGR")
+    uploaded_files = st.file_uploader(
+        "Upload a folder of optic nerve images", 
+        type=["png", "jpg", "jpeg"], 
+        accept_multiple_files=True
+    )
 
-        # Save original dimensions
-        st.session_state.orig_shape = image.shape[:2]  # (H, W)
+    if uploaded_files:
+        st.session_state.uploaded_files = uploaded_files
+        st.session_state.current_img_idx = 0
+        st.session_state.csv_buffers = {}
+        st.session_state.app_step = "model"
+        st.experimental_rerun()
 
-        # Run inference
-        results = model.infer(image)[0]
-        detections = sv.Detections.from_inference(results)
-        masks = detections.mask  # shape: (N, H, W)
 
-        if len(masks) == 0:
-            st.warning("⚠️ No masks found.")
+if st.session_state.app_step == "model":
+    uploaded_files = st.session_state.uploaded_files
+    current_idx = st.session_state.current_img_idx
+    uploaded_file = uploaded_files[current_idx]
+    filename_base = os.path.splitext(uploaded_file.name)[0]
+    st.session_state.uploaded_filename = filename_base
+    st.write(f"**Image {current_idx + 1} of {len(uploaded_files)}:** `{uploaded_file.name}`")
+
+    file_bytes = np.asarray(bytearray(uploaded_file.getvalue()), dtype=np.uint8)
+    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    st.image(image, caption="Original Image", channels="BGR")
+
+    # Save original dimensions
+    st.session_state.orig_shape = image.shape[:2]  # (H, W)
+
+    # Run inference
+    results = model.infer(image)[0]
+    detections = sv.Detections.from_inference(results)
+    masks = detections.mask  # shape: (N, H, W)
+
+    if len(masks) == 0:
+        st.warning("⚠️ No masks found.")
+        st.stop()
+    else:
+        fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+
+        axs[0].imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        axs[0].set_title("Original Image")
+        axs[0].axis("off")
+
+        if len(masks) >= 2:
+            areas = [np.sum(mask) for mask in masks]
+            idx_outer = np.argmax(areas)
+            idx_inner = np.argmin(areas)
+
+            mask_outer = (masks[idx_outer].astype(np.uint8)) * 255
+            mask_inner = (masks[idx_inner].astype(np.uint8)) * 255
+            yellow_mask = cv2.bitwise_and(mask_outer, cv2.bitwise_not(mask_inner))
+
+            axs[1].imshow(mask_outer, cmap="gray")
+            axs[1].set_title("Outer Mask")
+            axs[1].axis("off")
+
+            axs[2].imshow(yellow_mask, cmap="gray")
+            axs[2].set_title("Refined (Outer - Inner)")
+            axs[2].axis("off")
         else:
-            fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+            yellow_mask = (masks[0].astype(np.uint8)) * 255
+            axs[1].imshow(yellow_mask, cmap="gray")
+            axs[1].set_title("Refined Mask (Single)")
+            axs[1].axis("off")
+            axs[2].axis("off")
 
-            axs[0].imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            axs[0].set_title("Original Image")
-            axs[0].axis("off")
+        st.pyplot(fig)
 
-            if len(masks) >= 2:
-                areas = [np.sum(mask) for mask in masks]
-                idx_outer = np.argmax(areas)
-                idx_inner = np.argmin(areas)
+        st.session_state.yellow_mask = yellow_mask
 
-                mask_outer = (masks[idx_outer].astype(np.uint8)) * 255
-                mask_inner = (masks[idx_inner].astype(np.uint8)) * 255
-                yellow_mask = cv2.bitwise_and(mask_outer, cv2.bitwise_not(mask_inner))
-
-                axs[1].imshow(mask_outer, cmap="gray")
-                axs[1].set_title("Outer Mask")
-                axs[1].axis("off")
-
-                axs[2].imshow(yellow_mask, cmap="gray")
-                axs[2].set_title("Refined (Outer - Inner)")
-                axs[2].axis("off")
-            else:
-                yellow_mask = (masks[0].astype(np.uint8)) * 255
-                axs[1].imshow(yellow_mask, cmap="gray")
-                axs[1].set_title("Refined Mask (Single)")
-                axs[1].axis("off")
-                axs[2].axis("off")
-
-            st.pyplot(fig)
-
-            st.session_state.yellow_mask = yellow_mask
-
-            if st.button("➡️ Next: Select Chiasm Points"):
-                st.session_state.app_step = "select"
+    if st.button("➡️ Next: Select Points"):
+        st.session_state.app_step = "select"
+        st.experimental_rerun()
 
 # --- STEP 2: POINT SELECTION ---
-if st.session_state.app_step == "select" and st.session_state.yellow_mask is not None:
+if st.session_state.app_step == "select":
+
+    uploaded_files = st.session_state.uploaded_files
+    current_idx = st.session_state.current_img_idx
+    uploaded_file = uploaded_files[current_idx]
+    filename_base = os.path.splitext(uploaded_file.name)[0]
+    st.session_state.uploaded_filename = filename_base
+    st.write(f"**Image {current_idx + 1} of {len(uploaded_files)}:** `{uploaded_file.name}`")
+
+
     st.subheader("📍 Select Chiasm Points (Rightmost and Leftmost). The rightmost point should be a bit left to the chiasm, and the leftmost point should be about where the nerve ends.")
     st.markdown("👉 Click **first** on the rightmost chiasm point, then on the leftmost.")
     st.markdown("**Important:** Ensure that the leftmost point does not go beyond the edges of the optic nerve, and leave about 50 pixels of space on the edge of BOTH sides of the nerve in order to avoid errors.")
-
 
     yellow_mask = st.session_state.yellow_mask
     orig_h, orig_w = st.session_state.orig_shape
@@ -122,7 +158,6 @@ if st.session_state.app_step == "select" and st.session_state.yellow_mask is not
         point_display_radius=8,
         key="canvas_chiasm"
     )
-    #MAY CHANGE this later
     point_radius = 8  # must match point_display_radius in st_canvas
 
     if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) >= 2:
@@ -153,9 +188,17 @@ if st.session_state.app_step == "select" and st.session_state.yellow_mask is not
 
 if st.session_state.app_step == "diameter":
     
-    st.title("Nerve Diameter Measurement")
+    
+    
 
+    uploaded_files = st.session_state.uploaded_files
+    current_idx = st.session_state.current_img_idx
+    uploaded_file = uploaded_files[current_idx]
+    filename_base = os.path.splitext(uploaded_file.name)[0]
+    st.session_state.uploaded_filename = filename_base
+    st.write(f"**Image {current_idx + 1} of {len(uploaded_files)}:** `{uploaded_file.name}`")
 
+    st.subheader("Nerve Diameter Measurement")
 
     # analyze ------------------------
 
@@ -403,6 +446,8 @@ if st.session_state.app_step == "diameter":
     top_x_values = st.session_state.get("top_x_values")
     bottom_x_values = st.session_state.get("bottom_x_values")
     midpoints = st.session_state.get("midpoints")
+
+    
 
     if yellow_mask is None or top_x_values is None or bottom_x_values is None or midpoints is None:
         st.error("Required data for diameter measurement is missing. Please run contour analysis first.")
@@ -773,3 +818,26 @@ if st.session_state.app_step == "diameter":
             mime="text/csv",
             key="download_diameter_csv"
         )
+        csv_filename = f"{getattr(st.session_state, 'uploaded_filename', 'nerve')}_diameters.csv"
+        st.session_state.csv_buffers[csv_filename] = StringIO(csv_buffer.getvalue())
+
+        if st.session_state.current_img_idx < len(st.session_state.uploaded_files) - 1:
+            if st.button("➡️ Next Image"):
+                st.session_state.current_img_idx += 1
+                st.session_state.app_step = "model"
+                st.experimental_rerun()
+
+        # Only show ZIP download on the last image
+        import zipfile
+        import io
+        if st.session_state.current_img_idx == len(st.session_state.uploaded_files) - 1:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                for fname, csv_buf in st.session_state.csv_buffers.items():
+                    zf.writestr(fname, csv_buf.getvalue())
+            st.download_button(
+                label="⬇️ Download All CSVs as ZIP",
+                data=zip_buffer.getvalue(),
+                file_name="all_nerve_diameters.zip",
+                mime="application/zip"
+            )
