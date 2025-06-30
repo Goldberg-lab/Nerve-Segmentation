@@ -1,9 +1,9 @@
-inference
 streamlit
+opencv-python
 numpy
-cv2
-supervision
-streamlit-drawable-canvas
 Pillow
 matplotlib
-
+supervision
+streamlit-drawable-canvas
+inference
+pandas
