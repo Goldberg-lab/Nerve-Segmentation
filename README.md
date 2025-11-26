@@ -24,7 +24,7 @@ This app allows you to upload optic nerve images, run segmentation, select chias
    ```sh
    git clone <repo-url>
    ```
-   *Note: If you do not have git installed, simply download this reposity and unzip it.*
+   *Note: If you do not have git installed, simply download this repository and unzip it.*
 
    From there, either open this repository in a code editor/IDE like Visual Studio Code and open the terminal, or simply navigate to its location in your local terminal using the following command (assuming your folder is stored inside Desktop):
 

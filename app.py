@@ -227,7 +227,7 @@ if st.session_state.app_step == "select":
 
 
 
-# --- STEP 4: DIAMETER MEASUREMENT ---
+# --- STEP 3: DIAMETER MEASUREMENT ---
 
 if st.session_state.app_step == "diameter":
     
@@ -310,10 +310,6 @@ if st.session_state.app_step == "diameter":
 
     # === START: Midpoint Intersection Analysis ===
     
-    # Load the refined mask (replace this with your actual refined mask)
-    # refined_mask = cv2.imread('path_to_refined_mask', cv2.IMREAD_GRAYSCALE)
-
-    # Binarize the mask to ensure it's clean
     _, binary_mask = cv2.threshold(yellow_mask, 127, 255, cv2.THRESH_BINARY)
 
     # Find contours (for the outline and internal contours)
@@ -322,21 +318,21 @@ if st.session_state.app_step == "diameter":
     # Create a color version of the mask for visualization
     visualization = cv2.cvtColor(yellow_mask, cv2.COLOR_GRAY2BGR)
 
-    # Variables to keep track of x-coordinate and intersection counts
+
     x_start = leftmost_x
-    x_end = rightmost_x  # Replace with the actual value of the rightmost x-coordinate
+    x_end = rightmost_x  
 
-    # Store counts of intersections for each vertical line
+
     intersection_counts = []
-    midpoints = []  # List to store midpoints of intersections
+    midpoints = []  
 
-    # Use x-values from top_path and bottom_path for vertical line checks
+
     top_x_values = [pt[0] for pt in top_path]
     bottom_x_values = [pt[0] for pt in bottom_path]
 
     red_lines = top_x_values[1:] + bottom_x_values
 
-    # Iterate over x-coordinates
+
     for x in red_lines:
 
         intersections = []
@@ -344,16 +340,14 @@ if st.session_state.app_step == "diameter":
             # Check where the vertical line intersects the contour
             for i in range(len(contour) - 1):
                 pt1, pt2 = contour[i][0], contour[i + 1][0]
-                if pt1[0] <= x <= pt2[0] or pt2[0] <= x <= pt1[0]:  # Check if x lies between contour points
+                if pt1[0] <= x <= pt2[0] or pt2[0] <= x <= pt1[0]:  
                     intersections.append((pt1[1], pt2[1]))
 
 
-        # Only process if there are intersections
+   
         if intersections:
-            # Sort intersections by y-values for consistency
             intersections = sorted(intersections, key=lambda t: min(t[0], t[1]))
 
-            # Group intersections within a threshold of ±3
             groups = []
             current_group = [intersections[0]]
 
@@ -368,12 +362,9 @@ if st.session_state.app_step == "diameter":
                     groups.append(current_group)
                     current_group = [(y1, y2)]
 
-            # Append the last group
             groups.append(current_group)
 
 
-
-            # If there are at least 4 groups, find the midpoint between the 2nd and 3rd groups
             if len(groups) >= 4:
                 group_2 = groups[1]
                 group_3 = groups[2]
@@ -387,7 +378,6 @@ if st.session_state.app_step == "diameter":
                 midpoint_y = int((y2_avg + y3_avg) / 2)
                 midpoints.append((x, midpoint_y))  # Store the midpoint (x, midpoint_y)
 
-                # Draw the midpoint as a red point on the visualization
                 cv2.circle(visualization, (x, midpoint_y), 5, (0, 0, 255), -1)  # Red point
             elif len(groups) == 3:
                 # If there are exactly 3 groups, use the middle y-value
@@ -399,7 +389,6 @@ if st.session_state.app_step == "diameter":
 
               
             else:
-                # If less than 4 groups, calculate an additional midpoint
                 if midpoints:
                     # Use the last valid midpoint
                     last_midpoint_y = midpoints[-1][1]
@@ -469,14 +458,6 @@ if st.session_state.app_step == "diameter":
 
 
     # analyze ---------------------------
-
-
-
-
-
-
-
-
 
 
 
