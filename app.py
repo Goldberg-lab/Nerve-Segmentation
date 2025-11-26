@@ -38,12 +38,40 @@ if "current_img_idx" not in st.session_state:
     st.session_state.current_img_idx = 0
 if "csv_buffers" not in st.session_state:
     st.session_state.csv_buffers = {}
+if "microns_per_pixel" not in st.session_state:
+    st.session_state["microns_per_pixel"] = 3.07
+if "interval_microns" not in st.session_state:
+    # default interval = current sampling radius (30 px) * microns_per_pixel
+    st.session_state["interval_microns"] = 30 * st.session_state.get("microns_per_pixel", 3.07)
+if "sampling_radius" not in st.session_state:
+    st.session_state["sampling_radius"] = 30
+
 
 st.title("🧠 Optic Nerve Mask Segmentation")
 
 
 if st.session_state.app_step == "upload":
     st.write("Welcome to the Optic Nerve Mask Segmentation App! This app allows you to upload a folder of optic nerve images, run inference to segment each nerve, and then select chiasm points for further analysis.")
+
+    # microns-per-pixel control shown only on upload step (writes into session_state)
+    st.number_input(
+        "Image Scale: Microns per pixel (µm/pixel)",
+        min_value=0.0001,
+        step=0.01,
+        format="%.4f",
+        key="microns_per_pixel",
+        help="Enter the number of microns represented by one pixel for your imaging setup. Default: 3.07"
+    )
+
+    # measurement interval in microns (used to compute sampling radius in pixels)
+    st.number_input(
+        "Measurement interval: microns between sampling lines (µm)",
+        min_value=0.01,
+        step=0.1,
+        format="%.2f",
+        key="interval_microns",
+        help="Distance between consecutive measurement sections in microns. Default = 30 px × µm/pixel"
+    )
 
     uploaded_files = st.file_uploader(
         "Upload a folder of optic nerve images", 
@@ -52,12 +80,27 @@ if st.session_state.app_step == "upload":
     )
 
     if uploaded_files:
-        st.session_state.uploaded_files = uploaded_files
-        st.session_state.current_img_idx = 0
-        st.session_state.csv_buffers = {}
-        st.session_state.app_step = "model"
-        st.experimental_rerun()
-
+        st.write(f"{len(uploaded_files)} file(s) selected.")
+        # require explicit confirmation so widget value is saved before changing app_step
+        # ...existing code...
+        if st.button("➡️ Start processing"):
+            # copy current widget value into a separate confirmed key (safe to write)
+            st.session_state["microns_per_pixel_confirmed"] = float(
+                st.session_state.get("microns_per_pixel", 3.07)
+            )
+            # confirm interval and compute sampling radius (px)
+            st.session_state["interval_microns_confirmed"] = float(
+                st.session_state.get("interval_microns", 30 * st.session_state.get("microns_per_pixel", 3.07))
+            )
+            # sampling radius in pixels (rounded int) used in contour stepping
+            sampling_px = st.session_state["interval_microns_confirmed"] / st.session_state["microns_per_pixel_confirmed"]
+            st.session_state["sampling_radius"] = max(1, int(round(sampling_px)))
+            st.session_state.uploaded_files = uploaded_files
+            st.session_state.current_img_idx = 0
+            st.session_state.csv_buffers = {}
+            st.session_state.app_step = "model"
+            st.experimental_rerun()
+# ...existing code...
 
 if st.session_state.app_step == "model":
     uploaded_files = st.session_state.uploaded_files
@@ -209,8 +252,8 @@ if st.session_state.app_step == "diameter":
     yellow_mask = st.session_state.yellow_mask
     orig_h, orig_w = st.session_state.orig_shape
 
-    radius = 30
-    angle_step = 10
+    radius = int(st.session_state.get("sampling_radius", 30))
+    angle_step = 1
     max_steps = 100
 
     kernel = np.ones((3, 3), np.uint8)
@@ -728,8 +771,13 @@ if st.session_state.app_step == "diameter":
     st.pyplot(fig1)
 
       # Plot diameter vs x position in Streamlit
-    radius = 30
-    MICRONS_PER_PIXEL = 3.07
+    radius = int(st.session_state.get("sampling_radius", 30))
+    MICRONS_PER_PIXEL = float(
+        st.session_state.get(
+            "microns_per_pixel_confirmed",
+            st.session_state.get("microns_per_pixel", 3.07),
+        )
+    )
 
     fig2, ax2 = plt.subplots(figsize=(10, 6))
     if diameters_top:
@@ -761,7 +809,12 @@ if st.session_state.app_step == "diameter":
     
      # Prepare data for CSV: combine top and bottom nerves side by side
     max_len = max(len(diameters_top), len(diameters_bottom))
-    MICRONS_PER_PIXEL = 3.07
+    MICRONS_PER_PIXEL = float(
+        st.session_state.get(
+            "microns_per_pixel_confirmed",
+            st.session_state.get("microns_per_pixel", 3.07),
+        )
+    )
 
     rows = []
     for i in range(max_len):
