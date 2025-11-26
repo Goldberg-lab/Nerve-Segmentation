@@ -49,7 +49,7 @@ This app allows you to upload optic nerve images, run segmentation, select chias
 Start the Streamlit app with:
 
 ```sh
-python -m streamlit run app.py
+streamlit run app.py
 ```
 
 The app will open in your browser. Follow the instructions to upload images and analyze them.
