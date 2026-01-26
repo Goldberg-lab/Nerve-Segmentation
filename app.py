@@ -16,30 +16,6 @@ import shutil
 # Load API key from env; keep existing key if set in environment
 ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY", "")
 
-# Monkeypatch streamlit_drawable_canvas for Streamlit versions without image_to_url
-try:
-    import streamlit.elements.image as st_image
-    from streamlit.runtime.media_file_manager import add_media_file
-    if not hasattr(st_image, "image_to_url"):
-        def image_to_url(image, width=None, clamp=False, channels="RGB", output_format="PNG", image_id=None, **_):
-            if isinstance(image, np.ndarray):
-                image = Image.fromarray(image)
-            if width:
-                w, h = image.size
-                image = image.resize((width, int(h * width / w)))
-            buf = io.BytesIO()
-            image.save(buf, format=output_format)
-            data = buf.getvalue()
-            url = add_media_file(
-                data,
-                mime_type=f"image/{output_format.lower()}",
-                file_name=f"canvas_bg.{output_format.lower()}",
-            )
-            return url, {"width": image.width, "height": image.height}
-        st_image.image_to_url = image_to_url
-except Exception:
-    pass
-
 # Compatible rerun helper for old/new Streamlit
 def do_rerun():
     if hasattr(st, "rerun"):
