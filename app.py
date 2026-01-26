@@ -4,6 +4,7 @@ import cv2
 from inference import get_model
 import supervision as sv
 import os
+import io
 from PIL import Image
 import matplotlib.pyplot as plt
 from streamlit_drawable_canvas import st_canvas
@@ -12,12 +13,48 @@ import zipfile
 import shutil
 
 
-os.environ["ROBOFLOW_API_KEY"] = "rC3zob8rOUpOtd3W3bxY"
+# Load API key from env; keep existing key if set in environment
+ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY", "")
+
+# Monkeypatch streamlit_drawable_canvas for Streamlit versions without image_to_url
+try:
+    import streamlit.elements.image as st_image
+    from streamlit.runtime.media_file_manager import add_media_file
+    if not hasattr(st_image, "image_to_url"):
+        def image_to_url(image, width=None, clamp=False, channels="RGB", output_format="PNG", image_id=None, **_):
+            if isinstance(image, np.ndarray):
+                image = Image.fromarray(image)
+            if width:
+                w, h = image.size
+                image = image.resize((width, int(h * width / w)))
+            buf = io.BytesIO()
+            image.save(buf, format=output_format)
+            data = buf.getvalue()
+            url = add_media_file(
+                data,
+                mime_type=f"image/{output_format.lower()}",
+                file_name=f"canvas_bg.{output_format.lower()}",
+            )
+            return url, {"width": image.width, "height": image.height}
+        st_image.image_to_url = image_to_url
+except Exception:
+    pass
+
+# Compatible rerun helper for old/new Streamlit
+def do_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
 
 
-@st.cache_resource
+@st.cache(allow_output_mutation=True)
 def load_model():
-    return get_model(model_id="mouse-optic-nerve-uktj7/6", api_key=os.environ["ROBOFLOW_API_KEY"])
+    key = ROBOFLOW_API_KEY or os.environ.get("ROBOFLOW_API_KEY", "")
+    if not key:
+        st.error("Missing ROBOFLOW_API_KEY.")
+        st.stop()
+    return get_model(model_id="mouse-optic-nerve-uktj7/6", api_key=key)
 
 model = load_model()
 
@@ -99,7 +136,7 @@ if st.session_state.app_step == "upload":
             st.session_state.current_img_idx = 0
             st.session_state.csv_buffers = {}
             st.session_state.app_step = "model"
-            st.experimental_rerun()
+            do_rerun()
 # ...existing code...
 
 if st.session_state.app_step == "model":
@@ -161,7 +198,7 @@ if st.session_state.app_step == "model":
 
     if st.button("➡️ Next: Select Points"):
         st.session_state.app_step = "select"
-        st.experimental_rerun()
+        do_rerun()
 
 # --- STEP 2: POINT SELECTION ---
 if st.session_state.app_step == "select":
@@ -221,7 +258,7 @@ if st.session_state.app_step == "select":
 
         if st.button("➡️ Next: View Diameter Visualization and Graph"):
             st.session_state.app_step = "diameter"
-            st.experimental_rerun()
+            do_rerun()
     elif canvas_result.json_data is not None:
         st.info("ℹ️ Click two points on the image (first rightmost, then leftmost).")
 
@@ -859,7 +896,7 @@ if st.session_state.app_step == "diameter":
             if st.button("➡️ Next Image"):
                 st.session_state.current_img_idx += 1
                 st.session_state.app_step = "model"
-                st.experimental_rerun()
+                do_rerun()
 
         # Only show ZIP download on the last image
         import zipfile

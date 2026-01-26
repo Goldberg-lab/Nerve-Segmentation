@@ -7,3 +7,6 @@ supervision
 streamlit-drawable-canvas
 inference
 pandas
+python-dotenv
+pyvips-binary==8.17.2
+
