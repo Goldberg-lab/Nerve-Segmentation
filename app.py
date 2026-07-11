@@ -4,20 +4,40 @@ import cv2
 from inference import get_model
 import supervision as sv
 import os
-from PIL import Image
+import io
+from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
 from streamlit_drawable_canvas import st_canvas
+try:
+    # Fallback click-capture component that reliably renders images on Streamlit Cloud
+    from streamlit_image_coordinates import streamlit_image_coordinates
+except Exception:
+    streamlit_image_coordinates = None
 from pathlib import Path
 import zipfile
 import shutil
 
 
-os.environ["ROBOFLOW_API_KEY"] = "rC3zob8rOUpOtd3W3bxY"
+ROBOFLOW_API_KEY = (
+    os.environ.get("ROBOFLOW_API_KEY")
+    or st.secrets.get("ROBOFLOW_API_KEY", "")
+)
+# Compatible rerun helper for old/new Streamlit
+def do_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
 
 
-@st.cache_resource
+# --- CHANGE THIS SECTION ---
+@st.cache_resource  # Clean, modern caching for ML models
 def load_model():
-    return get_model(model_id="mouse-optic-nerve-uktj7/6", api_key=os.environ["ROBOFLOW_API_KEY"])
+    key = ROBOFLOW_API_KEY or os.environ.get("ROBOFLOW_API_KEY", "")
+    if not key:
+        st.error("Missing ROBOFLOW_API_KEY.")
+        st.stop()
+    return get_model(model_id="mouse-optic-nerve-uktj7/6", api_key=key)
 
 model = load_model()
 
@@ -30,8 +50,10 @@ if "orig_shape" not in st.session_state:
     st.session_state.orig_shape = None
 if "rightmost_point" not in st.session_state:
     st.session_state.rightmost_point = None
-if "leftmost_point" not in st.session_state:
-    st.session_state.leftmost_point = None
+if "top_leftmost_point" not in st.session_state:
+    st.session_state.top_leftmost_point = None
+if "bottom_leftmost_point" not in st.session_state:
+    st.session_state.bottom_leftmost_point = None
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 if "current_img_idx" not in st.session_state:
@@ -99,7 +121,7 @@ if st.session_state.app_step == "upload":
             st.session_state.current_img_idx = 0
             st.session_state.csv_buffers = {}
             st.session_state.app_step = "model"
-            st.experimental_rerun()
+            do_rerun()
 # ...existing code...
 
 if st.session_state.app_step == "model":
@@ -161,7 +183,7 @@ if st.session_state.app_step == "model":
 
     if st.button("➡️ Next: Select Points"):
         st.session_state.app_step = "select"
-        st.experimental_rerun()
+        do_rerun()
 
 # --- STEP 2: POINT SELECTION ---
 if st.session_state.app_step == "select":
@@ -173,10 +195,9 @@ if st.session_state.app_step == "select":
     st.session_state.uploaded_filename = filename_base
     st.write(f"**Image {current_idx + 1} of {len(uploaded_files)}:** `{uploaded_file.name}`")
 
-
-    st.subheader("📍 Select Chiasm Points (Rightmost and Leftmost). The rightmost point should be a bit left to the chiasm, and the leftmost point should be about where the nerve ends.")
-    st.markdown("👉 Click **first** on the rightmost chiasm point, then on the leftmost.")
-    st.markdown("**Important:** Ensure that the leftmost point does not go beyond the edges of the optic nerve, and leave about 50 pixels of space on the edge of BOTH sides of the nerve in order to avoid errors.")
+    st.subheader("📍 Select Chiasm & Leg Endpoints")
+    st.markdown("👉 Click **three** points on the nerve:")
+    st.markdown("1. The rightmost point (chiasm)\n2. The end of the **top** leg\n3. The end of the **bottom** leg\n*(Order doesn't matter, the app will sort them automatically!)*")
 
     yellow_mask = st.session_state.yellow_mask
     orig_h, orig_w = st.session_state.orig_shape
@@ -185,45 +206,88 @@ if st.session_state.app_step == "select":
     scale_factor = display_width / orig_w
     display_height = int(orig_h * scale_factor)
 
-    resized = cv2.resize(yellow_mask, (display_width, display_height))
-    display_img = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
-    pil_image = Image.fromarray(display_img)
+    current_image_key = f"{current_idx}_{filename_base}"
+    display_cache_key = f"_display_pil_bg_{current_image_key}_{display_width}"
 
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 255, 0, 0.6)",
-        stroke_color="cyan",
-        stroke_width=3,
-        background_image=pil_image,
-        update_streamlit=True,
-        height=display_height,
-        width=display_width,
-        drawing_mode="point",
-        point_display_radius=8,
-        key="canvas_chiasm"
-    )
-    point_radius = 8  # must match point_display_radius in st_canvas
+    if st.session_state.get(display_cache_key) is None:
+        resized = cv2.resize(yellow_mask, (display_width, display_height))
+        display_img = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
+        st.session_state[display_cache_key] = Image.fromarray(display_img).convert("RGB")
 
-    if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) >= 2:
-        coords = canvas_result.json_data["objects"]
-        point1 = (
-            round((coords[0]["left"] + point_radius) / scale_factor),
-            round((coords[0]["top"] + point_radius) / scale_factor)
-        )
-        point2 = (
-            round((coords[1]["left"] + point_radius) / scale_factor),
-            round((coords[1]["top"] + point_radius) / scale_factor)
-        )
+    pil_bg = st.session_state[display_cache_key]
 
-        st.session_state.rightmost_point = point1
-        st.session_state.leftmost_point = point2
+    if "clicked_points_display" not in st.session_state:
+        st.session_state.clicked_points_display = []
 
-        st.success(f"✅ Rightmost X: {point1[0]}, Leftmost X: {point2[0]}")
+    if st.session_state.get("_last_select_image_key") != current_image_key:
+        st.session_state.clicked_points_display = []
+        st.session_state.rightmost_point = None
+        st.session_state.top_leftmost_point = None
+        st.session_state.bottom_leftmost_point = None
+        st.session_state._last_select_image_key = current_image_key
 
-        if st.button("➡️ Next: View Diameter Visualization and Graph"):
-            st.session_state.app_step = "diameter"
-            st.experimental_rerun()
-    elif canvas_result.json_data is not None:
-        st.info("ℹ️ Click two points on the image (first rightmost, then leftmost).")
+    if st.button("Reset selected points"):
+        st.session_state.clicked_points_display = []
+        st.session_state.rightmost_point = None
+        st.session_state.top_leftmost_point = None
+        st.session_state.bottom_leftmost_point = None
+        do_rerun()
+
+    if streamlit_image_coordinates is None:
+        st.error("`streamlit-image-coordinates` is not installed.")
+    else:
+        preview = pil_bg.copy()
+        draw = ImageDraw.Draw(preview)
+        r = 6
+        for (px, py) in st.session_state.clicked_points_display:
+            draw.ellipse((px - r, py - r, px + r, py + r), outline=(0, 255, 255), width=3)
+
+        click = streamlit_image_coordinates(preview, key=f"img_click_{current_idx}_{filename_base}")
+        if click is not None and "x" in click and "y" in click:
+            x_disp = int(click["x"])
+            y_disp = int(click["y"])
+
+            # Collect up to 3 distinct clicks
+            if len(st.session_state.clicked_points_display) < 3:
+                is_new = True
+                for (px, py) in st.session_state.clicked_points_display:
+                    if abs(x_disp - px) <= 2 and abs(y_disp - py) <= 2:
+                        is_new = False
+                if is_new:
+                    st.session_state.clicked_points_display.append((x_disp, y_disp))
+                    do_rerun()
+
+        # Once 3 points are collected, process them
+        if len(st.session_state.clicked_points_display) >= 3:
+            p1, p2, p3 = st.session_state.clicked_points_display[:3]
+
+            # Map display -> original high-res coords
+            pts = [
+                (int(round(x / scale_factor)), int(round(y / scale_factor)))
+                for x, y in (p1, p2, p3)
+            ]
+
+            # 1. Rightmost point has the largest X
+            pts.sort(key=lambda pt: pt[0], reverse=True)
+            rightmost = pts[0]
+
+            # 2. The remaining two are the left legs. Sort by Y (smaller Y = Top)
+            left_pts = pts[1:]
+            left_pts.sort(key=lambda pt: pt[1])
+            top_leftmost = left_pts[0]
+            bottom_leftmost = left_pts[1]
+
+            st.session_state.rightmost_point = rightmost
+            st.session_state.top_leftmost_point = top_leftmost
+            st.session_state.bottom_leftmost_point = bottom_leftmost
+
+            st.success(f"✅ Rightmost X: {rightmost[0]} | Top Leg X: {top_leftmost[0]} | Bottom Leg X: {bottom_leftmost[0]}")
+
+            if st.button("➡️ Next: View Diameter Visualization and Graph"):
+                st.session_state.app_step = "diameter"
+                do_rerun()
+        else:
+            st.info(f"ℹ️ Click {3 - len(st.session_state.clicked_points_display)} more point(s) on the image.")
 
 
 
@@ -246,7 +310,8 @@ if st.session_state.app_step == "diameter":
     # analyze ------------------------
 
     rightmost_x = st.session_state.rightmost_point
-    leftmost_x = st.session_state.leftmost_point
+    top_leftmost_x = st.session_state.top_leftmost_point
+    bottom_leftmost_x = st.session_state.bottom_leftmost_point
 
     
     yellow_mask = st.session_state.yellow_mask
@@ -270,7 +335,8 @@ if st.session_state.app_step == "diameter":
     contour_points = set(tuple(pt[0]) for pt in main_contour)
 
     rx = rightmost_x[0]
-    lx = leftmost_x[0]
+    lx_top = top_leftmost_x[0]       # Top leg stopping point
+    lx_bottom = bottom_leftmost_x[0] # Bottom leg stopping point
     column = yellow_mask[:, rx]
     nonzero_y = np.where(column > 0)[0]
     if len(nonzero_y) < 2:
@@ -296,17 +362,17 @@ if st.session_state.app_step == "diameter":
     for _ in range(max_steps):
         cx, cy = top_path[-1]
         next_pt = find_next_contour_point(cx, cy, radius, 270, 90)
-        if not next_pt or next_pt[0] < lx:
+        if not next_pt or next_pt[0] < lx_top:
             break
         top_path.append(next_pt)
 
+    # Walk the bottom path, stop at the Bottom Leg X boundary
     for _ in range(max_steps):
         cx, cy = bottom_path[-1]
         next_pt = find_next_contour_point(cx, cy, radius, 90, 270)
-        if not next_pt or next_pt[0] < lx:
+        if not next_pt or next_pt[0] < lx_bottom:
             break
         bottom_path.append(next_pt)
-
 
     # === START: Midpoint Intersection Analysis ===
     
@@ -318,9 +384,11 @@ if st.session_state.app_step == "diameter":
     # Create a color version of the mask for visualization
     visualization = cv2.cvtColor(yellow_mask, cv2.COLOR_GRAY2BGR)
 
+    # FIX: Calculate the absolute leftmost point from your two new legs
+    leftmost_x = top_leftmost_x if top_leftmost_x[0] < bottom_leftmost_x[0] else bottom_leftmost_x
 
     x_start = leftmost_x
-    x_end = rightmost_x  
+    x_end = rightmost_x
 
 
     intersection_counts = []
@@ -865,7 +933,7 @@ if st.session_state.app_step == "diameter":
             if st.button("➡️ Next Image"):
                 st.session_state.current_img_idx += 1
                 st.session_state.app_step = "model"
-                st.experimental_rerun()
+                do_rerun()
 
         # Only show ZIP download on the last image
         import zipfile

@@ -1,9 +1,12 @@
-streamlit
+streamlit==1.53.1
+streamlit-drawable-canvas-fix
 opencv-python
 numpy
 Pillow
 matplotlib
 supervision
-streamlit-drawable-canvas
 inference
 pandas
+python-dotenv
+pyvips-binary==8.17.2
+streamlit-image-coordinates
