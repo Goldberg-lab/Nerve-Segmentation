@@ -550,6 +550,12 @@ if st.session_state.app_step == "diameter":
 
         return (y2 - y1) / (x2 - x1)  # Slope = rise / run
 
+    def segments_intersect(p1, p2, p3, p4):
+        """Standard segment-intersection test (proper crossing, not just touching)."""
+        def ccw(a, b, c):
+            return (c[1]-a[1]) * (b[0]-a[0]) > (b[1]-a[1]) * (c[0]-a[0])
+        return ccw(p1,p3,p4) != ccw(p2,p3,p4) and ccw(p1,p2,p3) != ccw(p1,p2,p4)
+
     # Function to find intersection with mask boundary along a line with midpoint constraint
     def find_mask_intersection(mask, start_x, start_y, angle, midpoint_y, is_top, max_length=300):
         """Find the intersection point with mask boundary starting from (start_x, start_y)
@@ -649,42 +655,42 @@ if st.session_state.app_step == "diameter":
     diameters_bottom = []
 
     # Process top points
+    prev_segment_top = None  # (x1,y1,x2,y2) of last accepted diameter line
+
     for i, (x, y, section_idx) in enumerate(top_points):
 
         slope = estimate_tangent_slope(top_points, i)
         if slope is None:
             continue
 
-        # Get the midpoint y for this section
         midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
 
-        # Calculate perpendicular angle (in radians)
         perp_angle = np.arctan(-1/slope) if slope != 0 else np.pi/2
 
-        # Find the intersection with the upper boundary (going up)
-        intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi,
-                                              midpoint_y, True)
-
-        # Find the intersection with the lower boundary (going down)
-        intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle,
-                                              midpoint_y, True)
+        intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi, midpoint_y, True)
+        intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle, midpoint_y, True)
 
         if (i == 0):
             intersection1 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=False)
             intersection2 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=True)
 
-        # Draw the full diameter line if both intersections found
         if intersection1 and intersection2:
             x1, y1 = intersection1
             x2, y2 = intersection2
-
             diameter = np.sqrt((x2-x1)**2 + (y2-y1)**2)
 
-            if diameter < 5:
-                # fallback to vertical:
+            needs_fallback = diameter < 5
+
+            # NEW: check for crossing against the previously accepted segment
+            if not needs_fallback and prev_segment_top is not None:
+                px1, py1, px2, py2 = prev_segment_top
+                if segments_intersect((x1, y1), (x2, y2), (px1, py1), (px2, py2)):
+                    needs_fallback = True
+
+            if needs_fallback:
                 intersection1 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=False)
                 intersection2 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=True)
-                
+
                 if intersection1 and intersection2:
                     x1, y1 = intersection1
                     x2, y2 = intersection2
@@ -692,27 +698,21 @@ if st.session_state.app_step == "diameter":
 
             diameters_top.append((x, diameter))
             cv2.line(color_mask, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            prev_segment_top = (x1, y1, x2, y2)  # NEW: update for next iteration
 
-    # Process bottom points
+    prev_segment_bottom = None
+
     for i, (x, y, section_idx) in enumerate(bottom_points):
-        
+
         slope = estimate_tangent_slope(bottom_points, i)
         if slope is None:
             continue
 
-        # Get the midpoint y for this section
         midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
-
-        # Calculate perpendicular angle (in radians)
         perp_angle = np.arctan(-1/slope) if slope != 0 else np.pi/2
 
-        # Find the intersection with the lower boundary (going down)
-        intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle,
-                                              midpoint_y, False)
-
-        # Find the intersection with the upper boundary (going up)
-        intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi,
-                                              midpoint_y, False)
+        intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle, midpoint_y, False)
+        intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi, midpoint_y, False)
 
         if (i == 0):
             intersection1 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=False)
@@ -721,14 +721,19 @@ if st.session_state.app_step == "diameter":
         if intersection1 and intersection2:
             x1, y1 = intersection1
             x2, y2 = intersection2
-
             diameter = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
-            if diameter < 5:
-                # fallback to vertical:
+            needs_fallback = diameter < 5
+
+            if not needs_fallback and prev_segment_bottom is not None:
+                px1, py1, px2, py2 = prev_segment_bottom
+                if segments_intersect((x1, y1), (x2, y2), (px1, py1), (px2, py2)):
+                    needs_fallback = True
+
+            if needs_fallback:
                 intersection1 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=False)
                 intersection2 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=True)
-                
+
                 if intersection1 and intersection2:
                     x1, y1 = intersection1
                     x2, y2 = intersection2
@@ -736,6 +741,7 @@ if st.session_state.app_step == "diameter":
 
             diameters_bottom.append((x, diameter))
             cv2.line(color_mask, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            prev_segment_bottom = (x1, y1, x2, y2)
 
     # Draw the midpoint dots to visualize the midpoints
     for i, midpoint in enumerate(midpoints):
