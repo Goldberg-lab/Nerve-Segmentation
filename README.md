@@ -1,74 +1,85 @@
-# Optic Nerve Segmentation App
+# Optic Nerve Segmentation & Diameter Analysis
 
-This app allows you to upload optic nerve images, run segmentation, select chiasm points, and analyze nerve diameters. This is useful for tumor analysis and numerous other practical applications.
+This app allows you to upload optic nerve images, run segmentation, select chiasm points, and analyze nerve diameters. This is useful for numerous practical applications requiring nerve morphology measurements.
+
+A hosted version is available here: **https://nerve-segmentation.streamlit.app/**. No installation required if you just want to try the app.
+
+The instructions below are for running the app locally.
 
 ## Features
 
 - Upload multiple optic nerve images for batch processing
-- Automatic segmentation using a pretrained model
+- Automatic segmentation using a pretrained Roboflow SAM model
 - Interactive point selection for chiasm analysis
+- Constant-interval perpendicular diameter sampling along the nerve contour
 - Visualization and CSV export of nerve diameter measurements
 
 ## Requirements
 
-- Python 3.8–3.11 (`inference` does not support versions above 3.11). Please install the appropriate Python version from [python.org](https://www.python.org).
-- See [`requirements.txt`](requirements.txt) for dependencies
-- If you want to maintain support for this app with new updates, please install `git` from [git.scm.com](https://git-scm.com/downloads).
+- **Miniconda** — installs its own isolated Python automatically. You do **not** need Python already installed on your computer.
+  Download: https://docs.conda.io/en/latest/miniconda.html
+- **Git** (optional) — used to download the code. If you'd rather not install git, you can instead click the green **Code -> Download ZIP** button on the GitHub repo page and unzip it manually.
 
 ## Installation
 
-1. Clone this repository:
-   
+### 1. Install Miniconda
 
-   Run the following in your local terminal:
-   ```sh
-   git clone <repo-url>
-   ```
-   *Note: If you do not have git installed, simply download this repository and unzip it.*
+Download the installer for your operating system from the link above and run it like any normal installer (accept the defaults).
 
-   From there, either open this repository in a code editor/IDE like Visual Studio Code and open the terminal, or simply navigate to its location in your local terminal using the following command (assuming your folder is stored inside Desktop):
+### 2. Get the code
 
-   ```sh
-   cd OpticNerve-Analysis
-   ``` 
-   **If your file is not stored in your main desktop, please put the actual path to the app's location after** `cd`
+Using git:
 
-2. Install dependencies:
+```bash
+git clone https://github.com/Goldberg-lab/Nerve-Segmentation
+cd Nerve-Segmentation
+```
 
-   Run this in the terminal:
+Or without git: download the ZIP from GitHub, unzip it, and open a terminal in that folder.
 
-   ```sh
-   pip install -r requirements.txt
-   ```
+### 3. Create the environment
 
-   Ensure that the dependencies are installing correctly. 
+From inside the project folder, run:
 
+```bash
+conda env create -f environment.yml
+conda activate optic-nerve-app
+```
+
+This creates a self-contained environment with the correct Python version and all required packages.
 
 ## Running the App
 
-Start the Streamlit app with:
+With the environment activated (`conda activate optic-nerve-app`), run:
 
-```sh
+```bash
 streamlit run app.py
 ```
 
-The app will open in your browser. Follow the instructions to upload images and analyze them.
+The app will open automatically in your browser at `http://localhost:8501`.
 
-## Platform-Specific Notes
+### Updating later
 
-### Mac
-- On mac, the local terminal app is called "terminal"
-- If you see a security warning about running Python or Streamlit, you may need to allow the app in **System Preferences > Security & Privacy**.
+If you pull new code changes and the environment needs updating:
 
-### Windows
+```bash
+conda env update -f environment.yml --prune
+```
 
-- On windows, the local terminal app is called "command prompt"
-- You may need to add python certain modules to your environment variables on your device to ensure everything runs properly
-- If you get a warning about running Python, you may need to allow it through Windows Defender or your antivirus.
+## Using the App
+
+1. **Upload**: Set the image scale (microns per pixel) and measurement interval, then upload one or more optic nerve images.
+2. **Segmentation**: The app runs Roboflow inference automatically and displays the segmented nerve mask.
+3. **Select Points**: Click three points on the mask. First the rightmost point (just left of the chiasm), then the two leftmost points (one for the top leg, and one for the bottom leg). Make sure points are within the nerve's bounds.
+4. **Diameter Analysis**: The app automatically samples diameters at constant intervals along the nerve contour and displays:
+   - Annotated nerve image with diameter overlays
+   - Diameter vs. position graph
+   - Downloadable CSV of all measurements
+5. For batch uploads, repeat steps 2 - 4 for each image; a combined ZIP of all CSVs is available after the last image.
 
 ## General Reminders
 
-- You need an internet connection for model inference.
-- Results and CSVs can be downloaded after processing images.
-- If you want multi-file upload, simply select numerous files in your desktop and upload them/
-- When you are selecting the left and right points for the diameter interval, please sure that both sides of the nerve are fully encompassed by the left bound.
+- An internet connection is required for model inference (Roboflow API).
+- Results and CSVs are downloadable directly from the app after processing.
+- To batch-upload, select multiple image files at once in the upload dialog.
+- When selecting the left/right chiasm points, ensure all points are within the nerve's length to prevent measurement errors.
