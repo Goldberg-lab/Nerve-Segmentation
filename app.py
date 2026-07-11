@@ -1,3 +1,6 @@
+import torch
+torch.backends.mps.is_available = lambda: False
+
 import streamlit as st
 import numpy as np
 import cv2
