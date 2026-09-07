@@ -377,152 +377,113 @@ if st.session_state.app_step == "diameter":
             break
         bottom_path.append(next_pt)
 
-    # === START: Midpoint Intersection Analysis ===
-    
+    # === START: Midpoint Intersection Analysis with Bridge Separator ===
     _, binary_mask = cv2.threshold(yellow_mask, 127, 255, cv2.THRESH_BINARY)
-
-    # Find contours (for the outline and internal contours)
     contours, _ = cv2.findContours(binary_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Create a color version of the mask for visualization
     visualization = cv2.cvtColor(yellow_mask, cv2.COLOR_GRAY2BGR)
-
-    # FIX: Calculate the absolute leftmost point from your two new legs
-    leftmost_x = top_leftmost_x if top_leftmost_x[0] < bottom_leftmost_x[0] else bottom_leftmost_x
-
-    x_start = leftmost_x
-    x_end = rightmost_x
-
-
-    intersection_counts = []
-    midpoints = []  
-
 
     top_x_values = [pt[0] for pt in top_path]
     bottom_x_values = [pt[0] for pt in bottom_path]
+    red_lines = sorted(list(set(top_x_values[1:] + bottom_x_values)))
 
-    red_lines = top_x_values[1:] + bottom_x_values
-
+    raw_midpoints = {}      # x -> y midpoint
+    is_touching = {}        # x -> True if legs are fused
 
     for x in red_lines:
-
         intersections = []
         for contour in contours:
-            # Check where the vertical line intersects the contour
             for i in range(len(contour) - 1):
                 pt1, pt2 = contour[i][0], contour[i + 1][0]
-                if pt1[0] <= x <= pt2[0] or pt2[0] <= x <= pt1[0]:  
+                if pt1[0] <= x <= pt2[0] or pt2[0] <= x <= pt1[0]:
                     intersections.append((pt1[1], pt2[1]))
 
+        if not intersections:
+            continue
 
-   
-        if intersections:
-            intersections = sorted(intersections, key=lambda t: min(t[0], t[1]))
+        intersections = sorted(intersections, key=lambda t: min(t[0], t[1]))
+        groups = []
+        current_group = [intersections[0]]
 
-            groups = []
-            current_group = [intersections[0]]
-
-            for i in range(1, len(intersections)):
-                y1, y2 = intersections[i]
-                last_y1, last_y2 = current_group[-1]
-
-                # If the y-values are within ±3, group them together
-                if abs(y1 - last_y1) <= 3 or abs(y2 - last_y2) <= 3:
-                    current_group.append((y1, y2))
-                else:
-                    groups.append(current_group)
-                    current_group = [(y1, y2)]
-
-            groups.append(current_group)
-
-
-            if len(groups) >= 4:
-                group_2 = groups[1]
-                group_3 = groups[2]
-
-                # Take the average of the y-values for the 2nd group
-                y2_avg = np.mean([y for y, _ in group_2])
-                # Take the average of the y-values for the 3rd group
-                y3_avg = np.mean([y for y, _ in group_3])
-
-                # Compute the midpoint
-                midpoint_y = int((y2_avg + y3_avg) / 2)
-                midpoints.append((x, midpoint_y))  # Store the midpoint (x, midpoint_y)
-
-                cv2.circle(visualization, (x, midpoint_y), 5, (0, 0, 255), -1)  # Red point
-            elif len(groups) == 3:
-                # If there are exactly 3 groups, use the middle y-value
-                middle_group = groups[1]
-                middle_group_avg_y = np.mean([y for y, _ in middle_group])
-
-                # Add the middle y-value as the midpoint
-                midpoints.append((x, int(middle_group_avg_y)))
-
-              
+        for i in range(1, len(intersections)):
+            y1, y2 = intersections[i]
+            last_y1, last_y2 = current_group[-1]
+            if abs(y1 - last_y1) <= 3 or abs(y2 - last_y2) <= 3:
+                current_group.append((y1, y2))
             else:
-                if midpoints:
-                    # Use the last valid midpoint
-                    last_midpoint_y = midpoints[-1][1]
-                else:
-                    last_midpoint_y = 0  # Fallback in case there's no valid midpoint yet
+                groups.append(current_group)
+                current_group = [(y1, y2)]
+        groups.append(current_group)
 
-                # Use the first group intersection's y-value (average of y-values of the first group)
-                first_group = groups[0]
-                first_group_avg_y = np.mean([y for y, _ in first_group])
+        if len(groups) >= 4:
+            # Clean split: top nerve, space, bottom nerve
+            y2_avg = np.mean([y for y, _ in groups[1]])
+            y3_avg = np.mean([y for y, _ in groups[2]])
+            raw_midpoints[x] = int((y2_avg + y3_avg) / 2)
+            is_touching[x] = False
+        elif len(groups) == 3:
+            # Touching at single boundary line
+            y_mid = np.mean([y for y, _ in groups[1]])
+            raw_midpoints[x] = int(y_mid)
+            is_touching[x] = False
+        else:
+            # 1 or 2 groups: Fused / touching zone
+            is_touching[x] = True
+            raw_midpoints[x] = None
 
-                # Use the last group intersection's y-value (average of y-values of the last group)
-                last_group = groups[-1]
-                last_group_avg_y = np.mean([y for y, _ in last_group])
+    # Bridge separator interpolation across touching zones
+    final_midpoints_dict = dict(raw_midpoints)
+    x_keys = sorted(red_lines)
 
-                # Smarter fallback: avoid weird high midpoints if groups collapse
+    for idx, x in enumerate(x_keys):
+        if is_touching.get(x, False):
+            # 1. Search left for the nearest separated anchor
+            left_anchor = None
+            for l_idx in range(idx - 1, -1, -1):
+                lx = x_keys[l_idx]
+                if not is_touching.get(lx, True) and raw_midpoints[lx] is not None:
+                    left_anchor = (lx, raw_midpoints[lx])
+                    break
 
-                # If there is more than one group and first/last are very far apart → trust average
-                if len(groups) > 1 and abs(first_group_avg_y - last_group_avg_y) > 10:
-                    average_y = int((last_midpoint_y + first_group_avg_y + last_group_avg_y) / 3)
-                else:
-                    # Groups too close → likely noise, just repeat last good midpoint
-                    average_y = last_midpoint_y
+            # 2. Search right for the nearest separated anchor
+            right_anchor = None
+            for r_idx in range(idx + 1, len(x_keys)):
+                rx_val = x_keys[r_idx]
+                if not is_touching.get(rx_val, True) and raw_midpoints[rx_val] is not None:
+                    right_anchor = (rx_val, raw_midpoints[rx_val])
+                    break
 
-                # Add this new midpoint
-                midpoints.append((x, average_y))
+            # 3. Connect anchors with linear separator line
+            if left_anchor and right_anchor:
+                x0, y0 = left_anchor
+                x1, y1 = right_anchor
+                interpolated_y = y0 + (x - x0) * (y1 - y0) / float(x1 - x0)
+                final_midpoints_dict[x] = int(round(interpolated_y))
+            elif left_anchor:
+                final_midpoints_dict[x] = left_anchor[1]
+            elif right_anchor:
+                final_midpoints_dict[x] = right_anchor[1]
+            else:
+                final_midpoints_dict[x] = orig_h // 2
 
-        
+    # Map back into the list format expected by the downstream code
+    midpoints = [(x, final_midpoints_dict[x]) for x in red_lines if x in final_midpoints_dict]
 
-
-        # Draw the vertical line on visualization for debugging
-        color = (255, 0, 0) if not intersections else (0, 255, 0)  # Blue for no intersections, green for any intersections
-      
-
-        # Print the x-coordinate of the vertical line if it intersects with the contour
-        if intersections:
-            print(f"Vertical line at x={x} has intersections.")
-
-    
-
-    # Debugging: print midpoints list to check
-
-
-    # After gathering midpoints, draw lines between consecutive midpoints to create a continuous line
+    # Draw the separator line on the preview
     if len(midpoints) > 1:
         for i in range(1, len(midpoints)):
             pt1 = midpoints[i - 1]
             pt2 = midpoints[i]
-            cv2.line(visualization, (pt1[0], pt1[1]), (pt2[0], pt2[1]), (0, 255, 255), 2)  # Yellow line
-
-    # Extend horizontal lines at the leftmost and rightmost points
-    if midpoints:
-        # Leftmost point
-        leftmost_x_point, leftmost_y = midpoints[-1]
-
-        # Rightmost point
-        rightmost_x_point, rightmost_y = midpoints[0]
-
-
+            # Draw yellow separator seam
+            cv2.line(visualization, pt1, pt2, (0, 255, 255), 2)
+            # Highlight touching / bridged points in magenta
+            if is_touching.get(pt2[0], False):
+                cv2.circle(visualization, pt2, 4, (255, 0, 255), -1)
 
     st.session_state.yellow_mask_processed = yellow_mask
     st.session_state.top_x_values = top_x_values
     st.session_state.bottom_x_values = bottom_x_values
     st.session_state.midpoints = midpoints
+    st.session_state.midpoints_dict = final_midpoints_dict  
 
 
 
@@ -759,7 +720,7 @@ if st.session_state.app_step == "diameter":
         return last_valid
 
         
-    def compute_smoothed_diameters(points, mask, midpoints, height, is_top=True):
+    def compute_smoothed_diameters(points, mask, midpoints_dict, height, is_top=True):
         """
         Computes diameter segments:
         - Index 0: strictly vertical
@@ -773,7 +734,7 @@ if st.session_state.app_step == "diameter":
         candidates = []  # list of tuples: (outer_pt, inner_pt, valid_perp)
 
         for i, (x, y, section_idx) in enumerate(points):
-            midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
+            midpoint_y = midpoints_dict.get(x, height // 2)
             outer_pt = (x, y)
 
             if i == 0:
@@ -831,15 +792,12 @@ if st.session_state.app_step == "diameter":
 
             for i in range(1, first_clean_idx):
                 outer_x, outer_y = candidates[i][0]
-                sec_idx = points[i][2]
-                mid_y = midpoints[sec_idx][1] if sec_idx < len(midpoints) else height // 2
+                mid_y = midpoints_dict.get(outer_x, height // 2)
 
-                # Linearly spaced target X between index 0 inner X and clean perpendicular inner X
                 alpha = i / float(first_clean_idx)
                 target_x = int(round(base_inner_x + alpha * (clean_inner_x - base_inner_x)))
                 target_y = mid_y
 
-                # Cast ray towards the target coordinate
                 smooth_inner = cast_ray_to_target(mask, outer_x, outer_y, target_x, target_y, mid_y, is_top)
                 final_segments.append(((outer_x, outer_y), smooth_inner))
 
@@ -852,9 +810,7 @@ if st.session_state.app_step == "diameter":
             # Check against previous segment to prevent consecutive overlaps
             prev_outer, prev_inner = final_segments[-1]
             if segments_intersect(outer_pt, inner_pt, prev_outer, prev_inner):
-                sec_idx = points[i][2]
-                mid_y = midpoints[sec_idx][1] if sec_idx < len(midpoints) else height // 2
-                # Parallel slope fallback
+                mid_y = midpoints_dict.get(outer_pt[0], height // 2)
                 target_x = outer_pt[0] + (prev_inner[0] - prev_outer[0])
                 inner_pt = cast_ray_to_target(mask, outer_pt[0], outer_pt[1], target_x, mid_y, mid_y, is_top)
 
@@ -865,16 +821,17 @@ if st.session_state.app_step == "diameter":
     # Lists to store diameter measurements
     diameters_top = []
     diameters_bottom = []
+    midpoints_dict = st.session_state.get("midpoints_dict", dict(midpoints))
 
     # Process Top Leg
-    top_segments = compute_smoothed_diameters(top_points, yellow_mask, midpoints, height, is_top=True)
+    top_segments = compute_smoothed_diameters(top_points, yellow_mask, midpoints_dict, height, is_top=True)
     for (x1, y1), (x2, y2) in top_segments:
         diameter = np.hypot(x2 - x1, y2 - y1)
         diameters_top.append((x1, diameter))
         cv2.line(color_mask, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
     # Process Bottom Leg
-    bottom_segments = compute_smoothed_diameters(bottom_points, yellow_mask, midpoints, height, is_top=False)
+    bottom_segments = compute_smoothed_diameters(bottom_points, yellow_mask, midpoints_dict, height, is_top=False)
     for (x1, y1), (x2, y2) in bottom_segments:
         diameter = np.hypot(x2 - x1, y2 - y1)
         diameters_bottom.append((x1, diameter))
