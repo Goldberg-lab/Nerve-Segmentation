@@ -721,98 +721,164 @@ if st.session_state.app_step == "diameter":
 
         return None
 
+
+    def cast_ray_to_target(mask, start_x, start_y, target_x, target_y, midpoint_y, is_top, max_length=400):
+        """
+        Casts a ray from (start_x, start_y) directed towards (target_x, target_y)
+        and stops at the mask edge or the midpoint boundary.
+        """
+        dx = target_x - start_x
+        dy = target_y - start_y
+        dist = np.hypot(dx, dy)
+        if dist == 0:
+            return (start_x, start_y)
+        
+        ux, uy = dx / dist, dy / dist
+        last_valid = (start_x, start_y)
+
+        for step in range(1, max_length):
+            cx = int(round(start_x + step * ux))
+            cy = int(round(start_y + step * uy))
+
+            # Check bounds
+            if cx < 0 or cx >= mask.shape[1] or cy < 0 or cy >= mask.shape[0]:
+                break
+
+            # Stop at midpoint divider
+            if is_top and cy >= midpoint_y:
+                return (cx, cy)
+            if not is_top and cy <= midpoint_y:
+                return (cx, cy)
+
+            # Stop if leaving the mask
+            if mask[cy, cx] == 0:
+                return (cx, cy)
+
+            last_valid = (cx, cy)
+
+        return last_valid
+
+        
+    def compute_smoothed_diameters(points, mask, midpoints, height, is_top=True):
+        """
+        Computes diameter segments:
+        - Index 0: strictly vertical
+        - Interpolates intermediate lines that cross index 0
+        - Index K+: normal perpendicular lines
+        """
+        if not points:
+            return []
+
+        # 1. Compute candidate segments
+        candidates = []  # list of tuples: (outer_pt, inner_pt, valid_perp)
+
+        for i, (x, y, section_idx) in enumerate(points):
+            midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
+            outer_pt = (x, y)
+
+            if i == 0:
+                # First line is strictly vertical
+                if is_top:
+                    in2 = vertical_diameter_top_leg(mask, x, y, midpoint_y, go_down=True)
+                else:
+                    in2 = vertical_diameter_bottom_leg(mask, x, y, midpoint_y, go_up=True)
+                inner_pt = in2 if in2 else (x, midpoint_y)
+                candidates.append((outer_pt, inner_pt, False))
+                continue
+
+            # Perpendicular candidates
+            slope = estimate_tangent_slope(points, i)
+            if slope is None or slope == 0:
+                perp_angle = np.pi / 2
+            else:
+                perp_angle = np.arctan(-1 / slope)
+
+            # Ensure the ray always points inward toward the middle of the nerve
+            # For top nerve: inward means dy > 0 (pointing down)
+            # For bottom nerve: inward means dy < 0 (pointing up)
+            dy = np.sin(perp_angle)
+            if (is_top and dy < 0) or (not is_top and dy > 0):
+                perp_angle += np.pi
+
+            in_pt = find_mask_intersection(mask, x, y, perp_angle, midpoint_y, is_top)
+
+            if in_pt is None:
+                # Fallback if ray misses
+                in_pt = (x, midpoint_y)
+
+            candidates.append((outer_pt, in_pt, True))
+
+        # 2. Find the first perpendicular segment (K) that does NOT cross the index 0 vertical segment
+        p0_outer, p0_inner, _ = candidates[0]
+        first_clean_idx = len(candidates) - 1  # default if all intersect
+
+        for i in range(1, len(candidates)):
+            pi_outer, pi_inner, _ = candidates[i]
+            # Check intersection with index 0
+            if not segments_intersect(p0_outer, p0_inner, pi_outer, pi_inner):
+                first_clean_idx = i
+                break
+
+        # 3. Build smoothed list
+        final_segments = []
+        # Index 0
+        final_segments.append((p0_outer, p0_inner))
+
+        # Interpolate segments 1 to first_clean_idx - 1
+        if first_clean_idx > 1:
+            clean_inner_x = candidates[first_clean_idx][1][0]
+            base_inner_x = p0_inner[0]
+
+            for i in range(1, first_clean_idx):
+                outer_x, outer_y = candidates[i][0]
+                sec_idx = points[i][2]
+                mid_y = midpoints[sec_idx][1] if sec_idx < len(midpoints) else height // 2
+
+                # Linearly spaced target X between index 0 inner X and clean perpendicular inner X
+                alpha = i / float(first_clean_idx)
+                target_x = int(round(base_inner_x + alpha * (clean_inner_x - base_inner_x)))
+                target_y = mid_y
+
+                # Cast ray towards the target coordinate
+                smooth_inner = cast_ray_to_target(mask, outer_x, outer_y, target_x, target_y, mid_y, is_top)
+                final_segments.append(((outer_x, outer_y), smooth_inner))
+
+        # Append normal perpendicular lines from first_clean_idx onward
+        for i in range(first_clean_idx, len(candidates)):
+            if i == 0:
+                continue
+            outer_pt, inner_pt, _ = candidates[i]
+            
+            # Check against previous segment to prevent consecutive overlaps
+            prev_outer, prev_inner = final_segments[-1]
+            if segments_intersect(outer_pt, inner_pt, prev_outer, prev_inner):
+                sec_idx = points[i][2]
+                mid_y = midpoints[sec_idx][1] if sec_idx < len(midpoints) else height // 2
+                # Parallel slope fallback
+                target_x = outer_pt[0] + (prev_inner[0] - prev_outer[0])
+                inner_pt = cast_ray_to_target(mask, outer_pt[0], outer_pt[1], target_x, mid_y, mid_y, is_top)
+
+            final_segments.append((outer_pt, inner_pt))
+
+        return final_segments
+
     # Lists to store diameter measurements
     diameters_top = []
     diameters_bottom = []
 
-    # Process top points
-    prev_segment_top = None  # (x1,y1,x2,y2) of last accepted diameter line
+    # Process Top Leg
+    top_segments = compute_smoothed_diameters(top_points, yellow_mask, midpoints, height, is_top=True)
+    for (x1, y1), (x2, y2) in top_segments:
+        diameter = np.hypot(x2 - x1, y2 - y1)
+        diameters_top.append((x1, diameter))
+        cv2.line(color_mask, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    for i, (x, y, section_idx) in enumerate(top_points):
-
-        slope = estimate_tangent_slope(top_points, i)
-        if slope is None:
-            continue
-
-        midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
-
-        perp_angle = np.arctan(-1/slope) if slope != 0 else np.pi/2
-
-        intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi, midpoint_y, True)
-        intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle, midpoint_y, True)
-
-        if (i == 0):
-            intersection1 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=False)
-            intersection2 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=True)
-
-        if intersection1 and intersection2:
-            x1, y1 = intersection1
-            x2, y2 = intersection2
-            diameter = np.sqrt((x2-x1)**2 + (y2-y1)**2)
-
-            needs_fallback = diameter < 5
-
-            # NEW: check for crossing against the previously accepted segment
-            if not needs_fallback and prev_segment_top is not None:
-                px1, py1, px2, py2 = prev_segment_top
-                if segments_intersect((x1, y1), (x2, y2), (px1, py1), (px2, py2)):
-                    needs_fallback = True
-
-            if needs_fallback:
-                intersection1 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=False)
-                intersection2 = vertical_diameter_top_leg(yellow_mask, x, y, midpoint_y, go_down=True)
-
-                if intersection1 and intersection2:
-                    x1, y1 = intersection1
-                    x2, y2 = intersection2
-                    diameter = np.sqrt((x2-x1)**2 + (y2-y1)**2)
-
-            diameters_top.append((x, diameter))
-            cv2.line(color_mask, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            prev_segment_top = (x1, y1, x2, y2)  # NEW: update for next iteration
-
-    prev_segment_bottom = None
-
-    for i, (x, y, section_idx) in enumerate(bottom_points):
-
-        slope = estimate_tangent_slope(bottom_points, i)
-        if slope is None:
-            continue
-
-        midpoint_y = midpoints[section_idx][1] if section_idx < len(midpoints) else height // 2
-        perp_angle = np.arctan(-1/slope) if slope != 0 else np.pi/2
-
-        intersection1 = find_mask_intersection(yellow_mask, x, y, perp_angle, midpoint_y, False)
-        intersection2 = find_mask_intersection(yellow_mask, x, y, perp_angle + np.pi, midpoint_y, False)
-
-        if (i == 0):
-            intersection1 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=False)
-            intersection2 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=True)
-
-        if intersection1 and intersection2:
-            x1, y1 = intersection1
-            x2, y2 = intersection2
-            diameter = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-
-            needs_fallback = diameter < 5
-
-            if not needs_fallback and prev_segment_bottom is not None:
-                px1, py1, px2, py2 = prev_segment_bottom
-                if segments_intersect((x1, y1), (x2, y2), (px1, py1), (px2, py2)):
-                    needs_fallback = True
-
-            if needs_fallback:
-                intersection1 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=False)
-                intersection2 = vertical_diameter_bottom_leg(yellow_mask, x, y, midpoint_y, go_up=True)
-
-                if intersection1 and intersection2:
-                    x1, y1 = intersection1
-                    x2, y2 = intersection2
-                    diameter = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-
-            diameters_bottom.append((x, diameter))
-            cv2.line(color_mask, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            prev_segment_bottom = (x1, y1, x2, y2)
+    # Process Bottom Leg
+    bottom_segments = compute_smoothed_diameters(bottom_points, yellow_mask, midpoints, height, is_top=False)
+    for (x1, y1), (x2, y2) in bottom_segments:
+        diameter = np.hypot(x2 - x1, y2 - y1)
+        diameters_bottom.append((x1, diameter))
+        cv2.line(color_mask, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
     # Draw the midpoint dots to visualize the midpoints
     for i, midpoint in enumerate(midpoints):
