@@ -72,7 +72,7 @@ if "sampling_radius" not in st.session_state:
     st.session_state["sampling_radius"] = 30
 
 
-st.title("🧠 Optic Nerve Mask Segmentation")
+st.title("Optic Nerve Mask Segmentation")
 
 
 if st.session_state.app_step == "upload":
@@ -198,8 +198,8 @@ if st.session_state.app_step == "select":
     st.session_state.uploaded_filename = filename_base
     st.write(f"**Image {current_idx + 1} of {len(uploaded_files)}:** `{uploaded_file.name}`")
 
-    st.subheader("📍 Select Chiasm & Leg Endpoints")
-    st.markdown("👉 Click **three** points on the nerve:")
+    st.subheader("Select Chiasm & Leg Endpoints")
+    st.markdown("Click **three** points on the nerve:")
     st.markdown("1. The rightmost point (chiasm)\n2. The end of the **top** leg\n3. The end of the **bottom** leg\n*(Order doesn't matter, the app will sort them automatically!)*")
 
     yellow_mask = st.session_state.yellow_mask
