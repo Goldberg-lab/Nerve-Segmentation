@@ -353,26 +353,37 @@ if st.session_state.app_step == "diameter":
 
     def find_next_contour_point(cx, cy, radius, min_angle, max_angle):
         angles = range(min_angle, max_angle + 1, angle_step) if min_angle <= max_angle else range(min_angle, max_angle - 1, -angle_step)
+        best_pt = None
+        min_dist = float('inf')
+
         for angle in angles:
             rad = np.deg2rad(angle)
             x = int(round(cx + radius * np.cos(rad)))
             y = int(round(cy + radius * np.sin(rad)))
-            dist = cv2.pointPolygonTest(main_contour, (x, y), True)
-            if abs(dist) < 3:
-                return (x, y)
-        return None
+            
+            # Check distance to main outer contour
+            dist = abs(cv2.pointPolygonTest(main_contour, (x, y), True))
+            if dist < 8:  # Relaxed tolerance so small curvature steps aren't dropped
+                if dist < min_dist:
+                    min_dist = dist
+                    best_pt = (x, y)
 
+        return best_pt
+
+    # Walk the top path (towards the left: angles pointing generally West/Northwest/Southwest)
     for _ in range(max_steps):
         cx, cy = top_path[-1]
-        next_pt = find_next_contour_point(cx, cy, radius, 270, 90)
+        # 100 deg (down-left) to 260 deg (up-left), centered around 180 deg (straight left)
+        next_pt = find_next_contour_point(cx, cy, radius, 260, 100)
         if not next_pt or next_pt[0] < lx_top:
             break
         top_path.append(next_pt)
 
-    # Walk the bottom path, stop at the Bottom Leg X boundary
+    # Walk the bottom path (towards the left)
     for _ in range(max_steps):
         cx, cy = bottom_path[-1]
-        next_pt = find_next_contour_point(cx, cy, radius, 90, 270)
+        # 80 deg to 280 deg centered around 180 deg
+        next_pt = find_next_contour_point(cx, cy, radius, 100, 260)
         if not next_pt or next_pt[0] < lx_bottom:
             break
         bottom_path.append(next_pt)
@@ -521,46 +532,17 @@ if st.session_state.app_step == "diameter":
     top_points = []  # Will store (x, y, section_index)
     bottom_points = []  # Will store (x, y, section_index)
 
-    # Track if any intersections are found
-    found_intersections = False
-
     color = (0, 255, 255)  # yellow for points
 
-    # --- Top points ---
-    for i, x in enumerate(top_x_values):  # Use enumerate to get index `i`
-        column = yellow_mask[:, x]  # Get the column at x-position
-        nonzero_y = np.where(column > 0)[0]  # Find y-coordinates where mask is present
+    # --- Top points directly from path ---
+    for i, (x, y) in enumerate(top_path):
+        top_points.append((x, y, i))
+        cv2.circle(color_mask, (x, y), 6, color, -1)
 
-        if len(nonzero_y) < 2:
-            continue  # Skip if not enough mask pixels
-
-        top_intersection = nonzero_y[0]  # Topmost y
-
-        found_intersections = True
-
-        midpoint_y = midpoints[i][1] if i < len(midpoints) else height // 2
-
-        if top_intersection < midpoint_y:
-            top_points.append((x, top_intersection, i))
-            cv2.circle(color_mask, (x, top_intersection), 6, color, -1)
-
-    # --- Bottom points ---
-    for i, x in enumerate(bottom_x_values):  # Again, use enumerate for index
-        column = yellow_mask[:, x]
-        nonzero_y = np.where(column > 0)[0]
-
-        if len(nonzero_y) < 2:
-            continue
-
-        bottom_intersection = nonzero_y[-1]  # Bottommost y
-
-        found_intersections = True
-
-        midpoint_y = midpoints[i][1] if i < len(midpoints) else height // 2
-
-        if bottom_intersection > midpoint_y:
-            bottom_points.append((x, bottom_intersection, i))
-            cv2.circle(color_mask, (x, bottom_intersection), 6, color, -1)
+    # --- Bottom points directly from path ---
+    for i, (x, y) in enumerate(bottom_path):
+        bottom_points.append((x, y, i))
+        cv2.circle(color_mask, (x, y), 6, color, -1)
 
     # Function to estimate tangent slope using nearby points
     def estimate_tangent_slope(points, index, search_range=3):
@@ -799,6 +781,25 @@ if st.session_state.app_step == "diameter":
                 target_y = mid_y
 
                 smooth_inner = cast_ray_to_target(mask, outer_x, outer_y, target_x, target_y, mid_y, is_top)
+
+                # IF THE RAY COLLAPSED (diameter < 5), PREVENT CROSSING BY BORROWING NEIGHBOR RAY DIRECTION
+                if np.hypot(smooth_inner[0] - outer_x, smooth_inner[1] - outer_y) < 5:
+                    # Look at the previous line's vector
+                    prev_out, prev_in = final_segments[-1]
+                    dx = prev_in[0] - prev_out[0]
+                    dy = prev_in[1] - prev_out[1]
+
+                    # Aim along that same direction from the current outer point
+                    smooth_inner = cast_ray_to_target(
+                        mask, 
+                        outer_x, 
+                        outer_y, 
+                        outer_x + dx, 
+                        outer_y + dy, 
+                        mid_y, 
+                        is_top
+                    )
+
                 final_segments.append(((outer_x, outer_y), smooth_inner))
 
         # Append normal perpendicular lines from first_clean_idx onward
