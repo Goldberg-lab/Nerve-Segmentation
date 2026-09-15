@@ -2,7 +2,7 @@
 
 This app allows you to upload optic nerve images, run segmentation, select chiasm points, and analyze nerve diameters. This is useful for numerous practical applications requiring nerve morphology measurements.
 
-A hosted version is available here: **https://nerve-segmentation.streamlit.app/**. No installation required if you just want to try the app.
+A hosted version is available here: **https://optic-nerve-segmentation.streamlit.app/**. No installation required if you just want to try the app.
 
 The instructions below are for running the app locally.
 
